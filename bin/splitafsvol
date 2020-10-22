@@ -137,7 +137,9 @@ fi
     pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
 
     # Check result.
-    diff -ur . "/afs/.:mount/$cell:$new_volume_name"
+    #  TODO revert if failed
+    ## diff is too confused by dangling symlinks etc
+    ##diff -ur . "/afs/.:mount/$cell:$new_volume_name"
     [[ -d "$hidden_dir/tmp-hidden" ]]
 
     # Pivot root.
