@@ -134,15 +134,19 @@ ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt"
     popd >/dev/null
 }
 
+delete_new_volume_and_revert() {
+    trap - EXIT
+    vos remove -server "$new_volume_serv" -partition "$new_volume_part" -id "$new_volume_name" -cell "$cell" -verbose -encrypt || :
+    mv "/afs/.:mount/$cell:$existing_volume/$hidden_dir/tmp-hidden" "/afs/.:mount/$cell:$existing_volume/$mp_relpath" || :
+    rmdir "/afs/.:mount/$cell:$existing_volume/$hidden_dir" || :
+    echo >&2 "Volume clone failed."
+    exit 1
+}
+
+trap delete_new_volume_and_revert EXIT
+
 # vos dump | vos restore
-if ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -localauth -encrypt | vos restore -server localhost -part $new_volume_part -name $new_volume_name -localauth"; then
-    echo "Volume cloned."
-else
-    echo >&2 "Reverting move."
-    mv "/afs/.:mount/$cell:$existing_volume/$hidden_dir/tmp-hidden" "/afs/.:mount/$cell:$existing_volume/$mp_relpath"
-    rmdir "/afs/.:mount/$cell:$existing_volume/$hidden_dir"
-    errx "Volume clone failed."
-fi
+ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -localauth -encrypt | vos restore -server localhost -part $new_volume_part -name $new_volume_name -localauth"; then
 
 {
     pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
@@ -186,10 +190,7 @@ fi
 	popd >/dev/null
     }
 
-    # Create mountpoint in the old volume
-    fs mkm -dir "$mp_relpath" -vol "$new_volume_name"
-
-    echo "Clone done, cleaning up remaining files."
+    echo "Cleaning up remaining files in the new volume."
 
     # Delete renamed directories
     {
@@ -202,9 +203,18 @@ fi
 	popd >/dev/null
     }
 
+    fs mkm -dir "$mp_relpath" -vol "$new_volume_name"
+
+    # Too late to revert if the next step fails.
+    trap - EXIT
+
+    echo "Clone done. Cleaning up remaining files in the old volume..."
+
     # Delete unwanted files from the old volume.
     #echo afs_rm_rf "$PWD/$hidden_dir"
     afs_rm_rf "$hidden_dir"
 
     popd >/dev/null
 }
+
+echo "All done."
