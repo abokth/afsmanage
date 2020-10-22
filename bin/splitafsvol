@@ -124,7 +124,7 @@ ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt"
 }
 
 # vos dump | vos restore
-if ssh "root@$new_volume_serv" "vos dump -id $existing_volume -localauth -encrypt | vos restore -server localhost -part $new_volume_part -name $new_volume_name -localauth"; then
+if ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -localauth -encrypt | vos restore -server localhost -part $new_volume_part -name $new_volume_name -localauth"; then
     echo "Volume cloned."
 else
     echo >&2 "Reverting move."
