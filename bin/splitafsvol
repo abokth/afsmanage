@@ -30,6 +30,7 @@ shopt -s dotglob
 type >/dev/null -t mktemp
 type >/dev/null -t vos
 type >/dev/null -t fs
+type >/dev/null -t strings
 
 cell="$1"; shift
 existing_volume="$1"; shift
@@ -62,7 +63,7 @@ afs_rm_rf() {
 	    else
 		# Delete directory contents.
 		pushd >/dev/null -- "$f"
-		got_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
+		got_volid=$(env LC_ALL=en_US.UTF-8 fs getfid . | strings | sed -nre 's,^.* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
 		if [[ "$got_volid" != "$expected_volid" ]]; then
 		    errx "$PWD unexpectedly a different volume"
 		fi
@@ -75,7 +76,7 @@ afs_rm_rf() {
 	    fi
 	elif [[ -e "$f" ]]; then
 	    # If this fails then we somehow left AFS or got into the wrong volume.
-	    got_volid=$(fs getfid -path "./$f" | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
+	    got_volid=$(env LC_ALL=en_US.UTF-8 fs getfid -path "./$f" | strings | sed -nre 's,^.* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
 	    if [[ "$got_volid" != "$expected_volid" ]]; then
 		errx "$PWD/$f unexpectedly a different volume or not in AFS"
 	    fi
@@ -111,7 +112,7 @@ ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt"
 {
     pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
 
-    root_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell '"$cell"'$,\1,p')
+    root_volid=$(env LC_ALL=en_US.UTF-8 fs getfid . | strings | sed -nre 's,^.* \(([0-9]+)\..*\) located in cell '"$cell"'$,\1,p')
     if [[ -z "$root_volid" ]]; then
 	errx "Could not identify volume in $PWD"
     fi
@@ -119,7 +120,7 @@ ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt"
     {
 	pushd >/dev/null -- "$mp_relpath"
 
-	mp_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell '"$cell"'$,\1,p')
+	mp_volid=$(env LC_ALL=en_US.UTF-8 fs getfid . | strings | sed -nre 's,^.* \(([0-9]+)\..*\) located in cell '"$cell"'$,\1,p')
 	if [[ -z "$mp_volid" ]]; then
 	    errx "Could not identify volume in $PWD"
 	fi
@@ -154,7 +155,7 @@ ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -loc
 {
     pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
 
-    existing_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
+    existing_volid=$(env LC_ALL=en_US.UTF-8 fs getfid . | strings | sed -nre 's,^.* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
     [[ -n "$existing_volid" ]]
 
     # Check result.
@@ -202,7 +203,7 @@ ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -loc
     {
 	pushd >/dev/null -- "/afs/.:mount/$cell:$new_volume_name"
 
-	new_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
+	new_volid=$(env LC_ALL=en_US.UTF-8 fs getfid . | strings | sed -nre 's,^.* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
 	[[ -n "$new_volid" ]]
 
 	# Delete unwanted files from the new volume.
