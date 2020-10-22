@@ -75,7 +75,7 @@ afs_rm_rf() {
 	    fi
 	elif [[ -e "$f" ]]; then
 	    #echo rm "$(readlink -f "$f")"
-	    rm -- "$f"
+	    rm -f -- "$f"
 	fi
     done
 }
