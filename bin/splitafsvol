@@ -43,12 +43,12 @@ errx() {
     exit 1
 }
 
-# Arguments to this function must be names of files, directories and mountpoints in the current directory.
+# Arguments to this function must be a volid followed by names of files, directories and mountpoints in the current directory.
+# They MAY start with ./
 afs_rm_rf() {
+    local expected_volid="$1"; shift
     local f
-    local here_volid there_volid
-    here_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
-    [[ -n "$here_volid" ]]
+    local got_volid
     for f in "$@"; do
 	if [[ -L "$f" ]]; then
 	    #echo rm "$(readlink -f "$f")"
@@ -62,11 +62,11 @@ afs_rm_rf() {
 	    else
 		# Delete directory contents.
 		pushd >/dev/null -- "$f"
-		there_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
-		if [[ "$there_volid" != "$here_volid" ]]; then
+		got_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
+		if [[ "$got_volid" != "$expected_volid" ]]; then
 		    errx "$PWD unexpectedly a different volume"
 		fi
-		afs_rm_rf *
+		afs_rm_rf "$expected_volid" *
 		popd >/dev/null
 
 		# Then delete directory.
@@ -74,8 +74,11 @@ afs_rm_rf() {
 		rmdir -- "$f"
 	    fi
 	elif [[ -e "$f" ]]; then
-	    # If this fails then we somehow left AFS.
-	    fs getfid -path "./$f" >/dev/null
+	    # If this fails then we somehow left AFS or got into the wrong volume.
+	    got_volid=$(fs getfid -path "./$f" | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
+	    if [[ "$got_volid" != "$expected_volid" ]]; then
+		errx "$PWD/$f unexpectedly a different volume or not in AFS"
+	    fi
 	    #echo rm "$(readlink -f "$f")"
 	    rm -f -- "$f"
 	elif [[ "$f" == '*' ]]; then
@@ -151,6 +154,9 @@ ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -loc
 {
     pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
 
+    existing_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
+    [[ -n "$existing_volid" ]]
+
     # Check result.
     #  TODO revert if failed
     ## diff is too confused by dangling symlinks etc
@@ -196,9 +202,12 @@ ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -loc
     {
 	pushd >/dev/null -- "/afs/.:mount/$cell:$new_volume_name"
 
+	new_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
+	[[ -n "$new_volid" ]]
+
 	# Delete unwanted files from the new volume.
 	#echo afs_rm_rf "$PWD/$todelete_dir"
-	afs_rm_rf "$todelete_dir"
+	afs_rm_rf "$new_volid" "$todelete_dir"
 
 	popd >/dev/null
     }
@@ -212,7 +221,7 @@ ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -loc
 
     # Delete unwanted files from the old volume.
     #echo afs_rm_rf "$PWD/$hidden_dir"
-    afs_rm_rf "$hidden_dir"
+    afs_rm_rf "$existing_volid" "$hidden_dir"
 
     popd >/dev/null
 }
