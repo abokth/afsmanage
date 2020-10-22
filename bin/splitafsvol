@@ -58,7 +58,7 @@ afs_rm_rf() {
 	    # fs lsm can be fooled by errors.
 	    # fs getfid can be fooled by mounting the same volume inside itself.
 	    if fs lsm >/dev/null 2>&1 -dir "$f"; then
-		fs rmm -dir "$f"
+		fs rmm -dir "./$f"
 	    else
 		# Delete directory contents.
 		pushd >/dev/null -- "$f"
@@ -74,8 +74,19 @@ afs_rm_rf() {
 		rmdir -- "$f"
 	    fi
 	elif [[ -e "$f" ]]; then
+	    # If this fails then we somehow left AFS.
+	    fs getfid -path "./$f" >/dev/null
 	    #echo rm "$(readlink -f "$f")"
 	    rm -f -- "$f"
+	elif [[ "$f" == '*' ]]; then
+	    : was an empty dir
+	else
+	    # Something exists, but it cannot be stat:ed.
+	    if fs lsm >/dev/null 2>&1 -dir "./$f"; then
+		fs rmm -dir "./$f"
+	    else
+		errx "$PWD/$f is confusing"
+	    fi
 	fi
     done
 }
