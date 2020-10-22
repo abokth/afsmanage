@@ -1,0 +1,197 @@
+#!/bin/bash
+
+# Copyright 2020 Kungliga Tekniska högskolan
+#
+# Permission is hereby granted, free of charge, to any person
+# obtaining a copy of this software and associated documentation files
+# (the "Software"), to deal in the Software without restriction,
+# including without limitation the rights to use, copy, modify, merge,
+# publish, distribute, sublicense, and/or sell copies of the Software,
+# and to permit persons to whom the Software is furnished to do so,
+# subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be
+# included in all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+# BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+# Authors: Alexander Boström, KTH
+
+set -e; set -o pipefail
+shopt -s dotglob
+
+type >/dev/null -t mktemp
+type >/dev/null -t vos
+type >/dev/null -t fs
+
+cell="$1"; shift
+existing_volume="$1"; shift
+mp_relpath="$1"; shift
+new_volume_name="$1"; shift
+new_volume_serv="$1"; shift
+new_volume_part="$1"; shift
+
+errx() {
+    echo >&2 "Error:" "$@"
+    exit 1
+}
+
+# Arguments to this function must be names of files, directories and mountpoints in the current directory.
+afs_rm_rf() {
+    local f
+    local here_volid there_volid
+    here_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
+    [[ -n "$here_volid" ]]
+    for f in "$@"; do
+	if [[ -L "$f" ]]; then
+	    #echo rm "$(readlink -f "$f")"
+	    rm -- "$f"
+	elif [[ -d "$f" ]]; then
+	    # We need both checks.
+	    # fs lsm can be fooled by errors.
+	    # fs getfid can be fooled by mounting the same volume inside itself.
+	    if fs lsm >/dev/null 2>&1 -dir "$f"; then
+		fs rmm -dir "$f"
+	    else
+		# Delete directory contents.
+		pushd >/dev/null -- "$f"
+		there_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell (.*)$,\1 \2,p')
+		if [[ "$there_volid" != "$here_volid" ]]; then
+		    errx "$PWD unexpectedly a different volume"
+		fi
+		afs_rm_rf *
+		popd >/dev/null
+
+		# Then delete directory.
+		#echo rmdir "$(readlink -f "$f")"
+		rmdir -- "$f"
+	    fi
+	elif [[ -e "$f" ]]; then
+	    #echo rm "$(readlink -f "$f")"
+	    rm -- "$f"
+	fi
+    done
+}
+
+vos exa -id "$existing_volume" -cell "$cell" >/dev/null
+if vos exa -id "$new_volume_name" -cell "$cell" >/dev/null 2>&1; then
+    errx "New volume already exists. Choose a different name."
+fi
+
+# Ensure sufficient space on file server (vos exa, vos partinfo)
+needed_space=$(vos exa -id "$existing_volume" -cell "$cell" -format | sed -nre 's,^diskused[[:space:]]+([[:digit:]]+)\s*$,\1,p')
+have_space=$(vos partinfo -server "$new_volume_serv" -part "$new_volume_part" -cell "$cell" | sed -nre 's,Free space on partition /.*: ([[:digit:]]+) K blocks out of total [[:digit:]]+,\1,p')
+if (( $have_space <= $needed_space )); then
+    errx "Not enough space on $new_volume_serv $new_volume_part"
+fi
+
+ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt" >/dev/null
+
+{
+    pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
+
+    root_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell '"$cell"'$,\1,p')
+    if [[ -z "$root_volid" ]]; then
+	errx "Could not identify volume in $PWD"
+    fi
+
+    {
+	pushd >/dev/null -- "$mp_relpath"
+
+	mp_volid=$(fs getfid . | sed -nre 's,^File .* \(([0-9]+)\..*\) located in cell '"$cell"'$,\1,p')
+	if [[ -z "$mp_volid" ]]; then
+	    errx "Could not identify volume in $PWD"
+	fi
+	if [[ "$mp_volid" != "$root_volid" ]]; then
+	    errx "Relative path pointed into another volume."
+	fi
+
+	popd >/dev/null
+    }
+
+    # Rename the directory in the old volume which is to be the new mountpoint.
+    hidden_dir=$(mktemp -d --tmpdir=. .tmpMOVEDTOSUBVOLXXXXXX)
+    mv "$mp_relpath" "$hidden_dir/tmp-hidden"
+
+    popd >/dev/null
+}
+
+# vos dump | vos restore
+if ssh "root@$new_volume_serv" "vos dump -id $existing_volume -localauth -encrypt | vos restore -server localhost -part $new_volume_part -name $new_volume_name -localauth"; then
+    echo "Volume cloned."
+else
+    echo >&2 "Reverting move."
+    mv "/afs/.:mount/$cell:$existing_volume/$hidden_dir/tmp-hidden" "/afs/.:mount/$cell:$existing_volume/$mp_relpath"
+    rmdir "/afs/.:mount/$cell:$existing_volume/$hidden_dir"
+    errx "Volume clone failed."
+fi
+
+{
+    pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
+
+    # Check result.
+    diff -ur . "/afs/.:mount/$cell:$new_volume_name"
+    [[ -d "$hidden_dir/tmp-hidden" ]]
+
+    # Pivot root.
+    {
+	pushd >/dev/null -- "/afs/.:mount/$cell:$new_volume_name"
+
+	# Clean up root of new volume.
+	todelete_dir=$(mktemp -d --tmpdir=. .tmpISINPARENTVOLXXXXXX)
+	for f in *; do
+	    if [[ -e "$f" || -L "$f" ]]; then
+		if [[ "$todelete_dir" != "./$f" ]]; then
+		    mv "$f" "$todelete_dir"
+		fi
+	    fi
+	done
+
+	{
+	    pushd >/dev/null -- "$todelete_dir/$hidden_dir/tmp-hidden"
+
+	    # Then move what we want to keep to the root of the new volume.
+	    fs copyacl . "/afs/.:mount/$cell:$new_volume_name" -clear
+	    chown --reference=. "/afs/.:mount/$cell:$new_volume_name" || :
+	    #getfacl . | setfacl --set-file=- "/afs/.:mount/$cell:$new_volume_name" || :
+	    for f in *; do
+		if [[ -e "$f" || -L "$f" ]]; then
+		    mv "$f" "/afs/.:mount/$cell:$new_volume_name/"
+		fi
+	    done
+
+	    popd >/dev/null
+	}
+
+	popd >/dev/null
+    }
+
+    # Create mountpoint in the old volume
+    fs mkm -dir "$mp_relpath" -vol "$new_volume_name"
+
+    echo "Clone done, cleaning up remaining files."
+
+    # Delete renamed directories
+    {
+	pushd >/dev/null -- "/afs/.:mount/$cell:$new_volume_name"
+
+	# Delete unwanted files from the new volume.
+	#echo afs_rm_rf "$PWD/$todelete_dir"
+	afs_rm_rf "$todelete_dir"
+
+	popd >/dev/null
+    }
+
+    # Delete unwanted files from the old volume.
+    #echo afs_rm_rf "$PWD/$hidden_dir"
+    afs_rm_rf "$hidden_dir"
+
+    popd >/dev/null
+}
