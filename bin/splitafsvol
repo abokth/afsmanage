@@ -44,6 +44,10 @@ errx() {
     exit 1
 }
 
+warn() {
+    echo >&2 "Warning:" "$@"
+}
+
 # Arguments to this function must be a volid followed by names of files, directories and mountpoints in the current directory.
 # They MAY start with ./
 afs_rm_rf() {
@@ -52,13 +56,12 @@ afs_rm_rf() {
     local got_volid
     for f in "$@"; do
 	if [[ -L "$f" ]]; then
-	    #echo rm "$(readlink -f "$f")"
-	    rm -- "$f"
+	    rm -- "$f" || warn "Could not remove link $f in $PWD"
 	elif [[ -d "$f" ]]; then
 	    # We need both checks.
 	    # fs lsm can be fooled by errors.
 	    # fs getfid can be fooled by mounting the same volume inside itself.
-	    if fs lsm >/dev/null 2>&1 -dir "$f"; then
+	    if fs lsm >/dev/null 2>&1 -dir "./$f"; then
 		fs rmm -dir "./$f"
 	    else
 		# Delete directory contents.
@@ -71,8 +74,7 @@ afs_rm_rf() {
 		popd >/dev/null
 
 		# Then delete directory.
-		#echo rmdir "$(readlink -f "$f")"
-		rmdir -- "$f"
+		rmdir -- "$f" || warn "Could not remove directory $f in $PWD"
 	    fi
 	elif [[ -e "$f" ]]; then
 	    # If this fails then we somehow left AFS or got into the wrong volume.
@@ -80,8 +82,7 @@ afs_rm_rf() {
 	    if [[ "$got_volid" != "$expected_volid" ]]; then
 		errx "$PWD/$f unexpectedly a different volume or not in AFS"
 	    fi
-	    #echo rm "$(readlink -f "$f")"
-	    rm -f -- "$f"
+	    rm -f -- "$f" || warn "Could not remove file $f in $PWD"
 	elif [[ "$f" == '*' ]]; then
 	    : was an empty dir
 	else
@@ -112,6 +113,8 @@ ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt"
 {
     pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
 
+    fs lq .
+
     root_volid=$(env LC_ALL=en_US.UTF-8 fs getfid . | strings | sed -nre 's,^.* \(([0-9]+)\..*\) located in cell '"$cell"'$,\1,p')
     if [[ -z "$root_volid" ]]; then
 	errx "Could not identify volume in $PWD"
@@ -132,8 +135,8 @@ ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt"
     }
 
     # Rename the directory in the old volume which is to be the new mountpoint.
-    hidden_dir=$(mktemp -d --tmpdir=. .tmpMOVEDTOSUBVOLXXXXXX)
-    mv "$mp_relpath" "$hidden_dir/tmp-hidden"
+    hidden_dir=$(mktemp -d --tmpdir=. .tmpMOVEDTOSUBVOL.XXXXXX)
+    mv -- "$mp_relpath" "$hidden_dir/tmp-hidden"
 
     popd >/dev/null
 }
@@ -141,7 +144,7 @@ ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt"
 delete_new_volume_and_revert() {
     trap - EXIT
     vos remove -server "$new_volume_serv" -partition "$new_volume_part" -id "$new_volume_name" -cell "$cell" -verbose -encrypt || :
-    mv "/afs/.:mount/$cell:$existing_volume/$hidden_dir/tmp-hidden" "/afs/.:mount/$cell:$existing_volume/$mp_relpath" || :
+    mv -- "/afs/.:mount/$cell:$existing_volume/$hidden_dir/tmp-hidden" "/afs/.:mount/$cell:$existing_volume/$mp_relpath" || :
     rmdir "/afs/.:mount/$cell:$existing_volume/$hidden_dir" || :
     echo >&2 "Volume clone failed."
     exit 1
@@ -169,11 +172,11 @@ ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -loc
 	pushd >/dev/null -- "/afs/.:mount/$cell:$new_volume_name"
 
 	# Clean up root of new volume.
-	todelete_dir=$(mktemp -d --tmpdir=. .tmpISINPARENTVOLXXXXXX)
+	todelete_dir=$(mktemp -d --tmpdir=. .tmpISINPARENTVOL.XXXXXX)
 	for f in *; do
 	    if [[ -e "$f" || -L "$f" ]]; then
 		if [[ "$todelete_dir" != "./$f" ]]; then
-		    mv "$f" "$todelete_dir"
+		    mv -- "$f" "$todelete_dir"
 		fi
 	    fi
 	done
@@ -187,7 +190,7 @@ ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -loc
 	    #getfacl . | setfacl --set-file=- "/afs/.:mount/$cell:$new_volume_name" || :
 	    for f in *; do
 		if [[ -e "$f" || -L "$f" ]]; then
-		    mv "$f" "/afs/.:mount/$cell:$new_volume_name/"
+		    mv -- "$f" "/afs/.:mount/$cell:$new_volume_name/"
 		fi
 	    done
 
@@ -207,13 +210,12 @@ ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -loc
 	[[ -n "$new_volid" ]]
 
 	# Delete unwanted files from the new volume.
-	#echo afs_rm_rf "$PWD/$todelete_dir"
 	afs_rm_rf "$new_volid" "$todelete_dir"
 
 	popd >/dev/null
     }
 
-    fs mkm -dir "$mp_relpath" -vol "$new_volume_name"
+    fs mkm -dir "./$mp_relpath" -vol "$new_volume_name"
 
     # Too late to revert if the next step fails.
     trap - EXIT
@@ -221,10 +223,12 @@ ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -loc
     echo "Clone done. Cleaning up remaining files in the old volume..."
 
     # Delete unwanted files from the old volume.
-    #echo afs_rm_rf "$PWD/$hidden_dir"
     afs_rm_rf "$existing_volid" "$hidden_dir"
+
+    fs lq . "./$mp_relpath"
 
     popd >/dev/null
 }
 
 echo "All done."
+
