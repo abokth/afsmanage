@@ -120,6 +120,8 @@ ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt"
 	errx "Could not identify volume in $PWD"
     fi
 
+    root_path=$(readlink -f "$PWD")
+
     {
 	pushd >/dev/null -- "$mp_relpath"
 
@@ -129,6 +131,11 @@ ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt"
 	fi
 	if [[ "$mp_volid" != "$root_volid" ]]; then
 	    errx "Relative path pointed into another volume."
+	fi
+
+	mp_path=$(readlink -f "$PWD")
+	if [[ "$root_path" == "$mp_path" ]]; then
+	    errx "Relative path resolved to the volume root."
 	fi
 
 	popd >/dev/null
