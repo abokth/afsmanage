@@ -82,7 +82,10 @@ afs_rm_rf() {
 	    if [[ "$got_volid" != "$expected_volid" ]]; then
 		errx "$PWD/$f unexpectedly a different volume or not in AFS"
 	    fi
-	    rm -f -- "$f" || warn "Could not remove file $f in $PWD"
+	    rm -f -- "$f"
+	    if [[ -e "$f" ]]; then
+		warn "Could not remove file $f in $PWD"
+	    fi
 	elif [[ "$f" == '*' ]]; then
 	    : was an empty dir
 	else
