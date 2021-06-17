@@ -111,22 +111,12 @@ if (( $have_space <= $needed_space )); then
     errx "Not enough space on $new_volume_serv $new_volume_part"
 fi
 
-{
-    pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
-
-    fs lq .
-
-    # Ensure we have write access before starting clone.
-    access_test_dir=$(mktemp -d --tmpdir=. .tmpACCESSTEST.XXXXXX)
-    rmdir "$access_test_dir"
-
-    popd >/dev/null
-}
-
 ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt" >/dev/null
 
 {
     pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
+
+    fs lq .
 
     root_volid=$(env LC_ALL=en_US.UTF-8 fs getfid . | strings | sed -nre 's,^.* \(([0-9]+)\..*\) located in cell '"$cell"'$,\1,p')
     if [[ -z "$root_volid" ]]; then
@@ -153,6 +143,10 @@ ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt"
 
 	popd >/dev/null
     }
+
+    # Ensure we have write access before starting clone.
+    access_test_dir=$(mktemp -d --tmpdir=. .tmpACCESSTEST.XXXXXX)
+    rmdir "$access_test_dir"
 
     # Rename the directory in the old volume which is to be the new mountpoint.
     hidden_dir=$(mktemp -d --tmpdir=. .tmpMOVEDTOSUBVOL.XXXXXX)
