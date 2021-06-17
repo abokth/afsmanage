@@ -116,6 +116,10 @@ fi
 
     fs lq .
 
+    # Ensure we have write access before starting clone.
+    access_test_dir=$(mktemp -d --tmpdir=. .tmpACCESSTEST.XXXXXX)
+    rmdir "$access_test_dir"
+
     popd >/dev/null
 }
 
