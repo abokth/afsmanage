@@ -111,12 +111,18 @@ if (( $have_space <= $needed_space )); then
     errx "Not enough space on $new_volume_serv $new_volume_part"
 fi
 
-ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt" >/dev/null
-
 {
     pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
 
     fs lq .
+
+    popd >/dev/null
+}
+
+ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt" >/dev/null
+
+{
+    pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
 
     root_volid=$(env LC_ALL=en_US.UTF-8 fs getfid . | strings | sed -nre 's,^.* \(([0-9]+)\..*\) located in cell '"$cell"'$,\1,p')
     if [[ -z "$root_volid" ]]; then
