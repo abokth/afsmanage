@@ -31,6 +31,12 @@ type >/dev/null -t mktemp
 type >/dev/null -t vos
 type >/dev/null -t fs
 type >/dev/null -t strings
+type >/dev/null -t ssh
+
+if [[ "$1" == "--quick-and-dirty" ]]; then
+    shift
+    qnd=yes
+fi
 
 cell="$1"; shift
 existing_volume="$1"; shift
@@ -148,6 +154,12 @@ ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt"
     access_test_dir=$(mktemp -d --tmpdir=. .tmpACCESSTEST.XXXXXX)
     rmdir "$access_test_dir"
 
+    popd >/dev/null
+}
+
+rename_to_hidden() {
+    pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
+
     # Rename the directory in the old volume which is to be the new mountpoint.
     hidden_dir=$(mktemp -d --tmpdir=. .tmpMOVEDTOSUBVOL.XXXXXX)
     mv -- "$mp_relpath" "$hidden_dir/tmp-hidden"
@@ -155,19 +167,33 @@ ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt"
     popd >/dev/null
 }
 
+if [[ -z "$qnd" ]]; then
+    rename_to_hidden
+fi
+
 delete_new_volume_and_revert() {
     trap - EXIT
+    fs rmm "/afs/.:mount/$cell:$existing_volume/$mp_relpath" || :
     vos remove -server "$new_volume_serv" -partition "$new_volume_part" -id "$new_volume_name" -cell "$cell" -verbose -encrypt || :
-    mv -- "/afs/.:mount/$cell:$existing_volume/$hidden_dir/tmp-hidden" "/afs/.:mount/$cell:$existing_volume/$mp_relpath" || :
-    rmdir "/afs/.:mount/$cell:$existing_volume/$hidden_dir" || :
+    if [[ -n "$hidden_dir" ]]; then
+	mv -- "/afs/.:mount/$cell:$existing_volume/$hidden_dir/tmp-hidden" "/afs/.:mount/$cell:$existing_volume/$mp_relpath" || :
+	rmdir "/afs/.:mount/$cell:$existing_volume/$hidden_dir" || :
+    fi
     echo >&2 "Volume clone failed."
     exit 1
 }
 
 trap delete_new_volume_and_revert EXIT
 
-# vos dump | vos restore
-ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -localauth -encrypt | vos restore -server localhost -part $new_volume_part -name $new_volume_name -localauth"
+if [[ -n "$qnd" ]]; then
+    # vos backup; vos dump ...backup | vos restore
+    ssh "root@$new_volume_serv" "set -e; set -o pipefail; vos backup -id $existing_volume -localauth -encrypt; vos dump -id $existing_volume.backup -localauth -encrypt | vos restore -server localhost -part $new_volume_part -name $new_volume_name -localauth"
+
+    rename_to_hidden
+else
+    # vos dump | vos restore
+    ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -localauth -encrypt | vos restore -server localhost -part $new_volume_part -name $new_volume_name -localauth"
+fi
 
 {
     pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
@@ -184,6 +210,11 @@ ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -loc
     # Pivot root.
     {
 	pushd >/dev/null -- "/afs/.:mount/$cell:$new_volume_name"
+
+	if [[ -n "$qnd" ]]; then
+	    mkdir "$hidden_dir"
+	    mv -- "$mp_relpath" "$hidden_dir/tmp-hidden"
+	fi
 
 	# Clean up root of new volume.
 	todelete_dir=$(mktemp -d --tmpdir=. .tmpISINPARENTVOL.XXXXXX)
@@ -214,6 +245,14 @@ ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -loc
 	popd >/dev/null
     }
 
+    if [[ -n "$qnd" ]]; then
+	echo "Creating mountpoint."
+	fs mkm -dir "./$mp_relpath" -vol "$new_volume_name"
+
+	# Too late to revert if the next step fails.
+	trap - EXIT
+    fi
+
     echo "Cleaning up remaining files in the new volume."
 
     # Delete renamed directories
@@ -229,10 +268,13 @@ ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -loc
 	popd >/dev/null
     }
 
-    fs mkm -dir "./$mp_relpath" -vol "$new_volume_name"
+    if [[ -z "$qnd" ]]; then
+	echo "Creating mountpoint."
+	fs mkm -dir "./$mp_relpath" -vol "$new_volume_name"
 
-    # Too late to revert if the next step fails.
-    trap - EXIT
+	# Too late to revert if the next step fails.
+	trap - EXIT
+    fi
 
     echo "Clone done. Cleaning up remaining files in the old volume..."
 
