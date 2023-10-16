@@ -117,7 +117,7 @@ if (( $have_space <= $needed_space )); then
     errx "Not enough space on $new_volume_serv $new_volume_part"
 fi
 
-ssh "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt" >/dev/null
+ssh -K -o GSSAPIKeyExchange=yes "root@$new_volume_serv" "vos exa -id '$existing_volume' -localauth -encrypt" >/dev/null
 
 {
     pushd >/dev/null -- "/afs/.:mount/$cell:$existing_volume"
@@ -187,12 +187,12 @@ trap delete_new_volume_and_revert EXIT
 
 if [[ -n "$qnd" ]]; then
     # vos backup; vos dump ...backup | vos restore
-    ssh "root@$new_volume_serv" "set -e; set -o pipefail; vos backup -id $existing_volume -localauth -encrypt; vos dump -id $existing_volume.backup -localauth -encrypt | vos restore -server localhost -part $new_volume_part -name $new_volume_name -localauth"
+    ssh -K -o GSSAPIKeyExchange=yes "root@$new_volume_serv" "set -e; set -o pipefail; vos backup -id $existing_volume -localauth -encrypt; vos dump -id $existing_volume.backup -localauth -encrypt | vos restore -server localhost -part $new_volume_part -name $new_volume_name -localauth"
 
     rename_to_hidden
 else
     # vos dump | vos restore
-    ssh "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -localauth -encrypt | vos restore -server localhost -part $new_volume_part -name $new_volume_name -localauth"
+    ssh -K -o GSSAPIKeyExchange=yes "root@$new_volume_serv" "set -o pipefail; vos dump -id $existing_volume -localauth -encrypt | vos restore -server localhost -part $new_volume_part -name $new_volume_name -localauth"
 fi
 
 {
